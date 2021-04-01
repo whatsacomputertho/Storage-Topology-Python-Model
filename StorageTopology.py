@@ -1,10 +1,10 @@
 import numpy as np
 import sympy as sp
 from itertools import combinations
+from itertools import permutations
 
 class Node:
     def __init__(self, capacity):
-        self.objects = []
         self.coefficients = []
         self.capacity = capacity
 
@@ -65,6 +65,7 @@ class StorageTopology:
         self.nodes = []
         self.objects = []
         self.edges = []
+        self.matrices = []
         for i in range(num_nodes):
             self.nodes.append(Node(capacity))
         for i in range(num_objects):
@@ -87,6 +88,11 @@ class StorageTopology:
         
     read_weights = staticmethod(read_weights)
 
+    def permute(allocation):
+        return permutations(allocation)
+
+    permute = staticmethod(permute)
+
     def generate_all_replicative_allocation_patterns(self):
         patterns = []
         for i in range(len(self.objects)**len(self.nodes)):
@@ -103,48 +109,49 @@ class StorageTopology:
                 j -= 1
             patterns.append(pattern)
         return patterns
-
+    
     def generate_all_replicative_allocations(self):
         allocations = []
         for pattern in self.generate_all_replicative_allocation_patterns():
             allocation = []
             for i in range(len(pattern)):
-                allocation.append(self.objects[pattern[i]])
+                row = [0, 0, 0]
+                row[pattern[i]] = 1
+                allocation.append(row)
             allocations.append(allocation)
         return allocations
 
     def filter_feasible_replicative_allocations(self, all_allocations):
-        for x in self.objects:
-            i = len(all_allocations) - 1
-            while i >= 0:
-                has_x = False
-                for y in all_allocations[i]:
-                    if x is y:
-                        has_x = True
-                if has_x == False:
-                    all_allocations.pop(i)
-                i -= 1
-        feasible_allocations = all_allocations
+        feasible_allocations = []
+        for allocation in all_allocations:
+            if np.linalg.matrix_rank(allocation) == len(self.objects):
+                feasible_allocations.append(allocation)
         return feasible_allocations
 
-    def clear_objects_stored(self):
-        for node in self.nodes:
-            node.objects.clear()
-            node.coefficients.clear()
-
-    def allocate_objects_replicatively(self, allocation):
-        self.clear_objects_stored()
-        for i in range(len(allocation)):
-            objects = []
-            objects.append(allocation[i])
-            self.nodes[i].objects = objects
-
     def allocate_coded_objects(self, allocation):
-        self.clear_objects_stored()
-        for node in self.nodes:
-            node.objects = self.objects
         for i in range(len(allocation)):
             self.nodes[i].coefficients = allocation[i]
+
+    def get_allocation(self):
+        allocation = ""
+        for node in self.nodes:
+            item = ""
+            for i in range(len(node.coefficients)):
+                if node.coefficients[i] == 0:
+                    item += ""
+                elif node.coefficients[i] == 1:
+                    item += self.objects[i].name
+                    item += " + "
+                else:
+                    item += "({coef}){name}".format(coef = node.coefficients[i], name = self.objects[i].name)
+                    item += " + "
+            if item[-3:] == " + ":
+                item = item[:-3]
+            if self.nodes.index(node) < (len(self.nodes) - 1):
+                allocation += "{st}, ".format(st = item)
+            else:
+                allocation += item
+        return allocation
 
     def check_coded_storage_feasibility(self):
         coefficient_matrix = []
@@ -164,6 +171,14 @@ class StorageTopology:
                 matrix.append(node.coefficients)
             matrices.append(matrix)
         return matrices
+
+    def generate_all_coded_storage_coefficient_matrices(self):
+        self.matrices.clear()
+        matrices = []
+        for k in range(1, len(self.nodes) + 1):
+            for matrix in self.generate_coded_storage_coefficient_matrices(k):
+                matrices.append(matrix)
+        self.matrices = matrices
 
     def check_matrix_solvable(self, matrix, index):
         for i in range(matrix.shape[0]):
@@ -186,29 +201,49 @@ class StorageTopology:
             sets.append(nodes)
         return sets
 
-    def generate_coded_storage_retrieval_set_by_object(self, matrices, obj):
+    def generate_coded_storage_retrieval_set_by_object(self, obj):
         solvable_matrices = []
         obj_index = self.objects.index(obj)
-        for i in range(len(matrices)):
-            if self.check_matrix_solvable(sp.Matrix(matrices[i]).rref()[0], obj_index):
+        for i in range(len(self.matrices)):
+            if self.check_matrix_solvable(sp.Matrix(self.matrices[i]).rref()[0], obj_index):
                 not_superlist = True
                 for j in range(len(solvable_matrices)):
-                    if(all(row in matrices[i] for row in solvable_matrices[j])):
+                    if(all(row in self.matrices[i] for row in solvable_matrices[j]) and (len(self.matrices[i]) != len(solvable_matrices[j]))):
                         not_superlist = False
                 if not_superlist:
-                    solvable_matrices.append(matrices[i])
+                    solvable_matrices.append(self.matrices[i])
         return self.get_node_set_from_coefficient_matrix(solvable_matrices)
 
-    def calculate_replicative_retrieval_latencies_by_node_and_object(self, node, obj):
-        latencies = []
-        for n in self.nodes:
-            if n.objects[0] is obj:
+    def calculate_coded_retrieval_latencies_by_node_and_object(self, node, obj):
+        retrieval_latencies = []
+        retrieval_sets = self.generate_coded_storage_retrieval_set_by_object(obj)
+        for retrieval_set in retrieval_sets:
+            set_latencies = []
+            for n in retrieval_set:
+                is_node = False
+                if n is node:
+                    set_latencies.append(0.0)
+                    is_node = True
                 for edge in self.edges:
+                    if is_node:
+                        break
                     if (((edge.nodes[0] is node) and (edge.nodes[1] is n)) or ((edge.nodes[0] is n) and (edge.nodes[1] is node))):
-                        latencies.append(edge.weight)
-                    elif node is n:
-                        latencies.append(0.0)
-        return latencies
+                        set_latencies.append(edge.weight)
+            retrieval_latencies.append(set_latencies)
+        return retrieval_latencies
+
+    def calculate_maximum_latencies_from_retrieval_latencies(self, latencies):
+        maximum_latency = latencies[0]
+        for latency in latencies:
+            if latency > maximum_latency:
+                maximum_latency = latency
+        return maximum_latency
+
+    def calculate_maximum_latencies_from_retrieval_lists(self, retrieval_latencies):
+        maximum_latencies = []
+        for latencies in retrieval_latencies:
+            maximum_latencies.append(self.calculate_maximum_latencies_from_retrieval_latencies(latencies))
+        return maximum_latencies
 
     def calculate_minimum_latency_from_retrieval_list(self, latencies):
         min_latency = latencies[0]
@@ -217,51 +252,49 @@ class StorageTopology:
                 min_latency = latency
         return min_latency
 
-    def calculate_minimum_replicative_latencies_by_node(self, node):
+    def calculate_minimum_coded_latencies_by_node(self, node):
         min_latencies = []
         for obj in self.objects:
-            min_latencies.append(self.calculate_minimum_latency_from_retrieval_list(self.calculate_replicative_retrieval_latencies_by_node_and_object(node, obj)))
+            min_latencies.append(self.calculate_minimum_latency_from_retrieval_list(self.calculate_maximum_latencies_from_retrieval_lists(self.calculate_coded_retrieval_latencies_by_node_and_object(node, obj))))
         return min_latencies
 
-    def calculate_average_replicative_latency_by_object(self, obj):
+    def calculate_average_coded_latency_by_object(self, obj):
         latency_sum = 0.0
         for node in self.nodes:
-            latency_sum += self.calculate_minimum_latency_from_retrieval_list(self.calculate_replicative_retrieval_latencies_by_node_and_object(node, obj))
+            latency_sum += self.calculate_minimum_latency_from_retrieval_list(self.calculate_maximum_latencies_from_retrieval_lists(self.calculate_coded_retrieval_latencies_by_node_and_object(node, obj)))
         return (latency_sum / len(self.nodes))
 
-    def calculate_worst_case_replicative_latency_by_node(self, node):
-        min_latencies = self.calculate_minimum_replicative_latencies_by_node(node)
+    def calculate_worst_case_coded_latency_by_node(self, node):
+        min_latencies = self.calculate_minimum_coded_latencies_by_node(node)
         worst_case_latency = min_latencies[0]
         for f in min_latencies:
             if f > worst_case_latency:
                 worst_case_latency = f
         return worst_case_latency
 
-    def calculate_minimum_replicative_latencies(self):
+    def calculate_minimum_coded_latencies(self):
         min_latencies = []
         for node in self.nodes:
-            min_latencies.append(self.calculate_minimum_replicative_latencies_by_node(node))
+            min_latencies.append(self.calculate_worst_case_coded_latency_by_node(node))
         return min_latencies
 
-    def calculate_average_replicative_latencies(self):
+    def calculate_average_coded_latencies(self):
         average_latencies = []
         for obj in self.objects:
-            average_latencies.append(self.calculate_average_replicative_latency_by_object(obj))
+            average_latencies.append(self.calculate_average_coded_latency_by_object(obj))
         return average_latencies
 
-    def calculate_worst_case_replicative_latency(self):
-        worst_case_latencies = []
-        for node in self.nodes:
-            worst_case_latencies.append(self.calculate_worst_case_replicative_latency_by_node(node))
+    def calculate_worst_case_coded_latency(self):
+        worst_case_latencies = self.calculate_minimum_coded_latencies()
         worst_case_latency = worst_case_latencies[0]
         for f in worst_case_latencies:
             if f > worst_case_latency:
                 worst_case_latency = f
         return worst_case_latency
 
-    def calculate_average_replicative_latency(self):
+    def calculate_average_coded_latency(self):
         latency_sum = 0.0
-        average_replicative_latencies = self.calculate_average_replicative_latencies()
-        for f in average_replicative_latencies:
+        average_coded_latencies = self.calculate_average_coded_latencies()
+        for f in average_coded_latencies:
             latency_sum += f
-        return (latency_sum / len(average_replicative_latencies))
+        return (latency_sum / len(average_coded_latencies))
