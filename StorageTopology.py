@@ -66,6 +66,7 @@ class StorageTopology:
         self.objects = []
         self.edges = []
         self.matrices = []
+        self.retrieval_sets = []
         for i in range(num_nodes):
             self.nodes.append(Node(capacity))
         for i in range(num_objects):
@@ -127,10 +128,6 @@ class StorageTopology:
             if np.linalg.matrix_rank(allocation) == len(self.objects):
                 feasible_allocations.append(allocation)
         return feasible_allocations
-
-    def allocate_coded_objects(self, allocation):
-        for i in range(len(allocation)):
-            self.nodes[i].coefficients = allocation[i]
 
     def get_allocation(self):
         allocation = ""
@@ -214,9 +211,21 @@ class StorageTopology:
                     solvable_matrices.append(self.matrices[i])
         return self.get_node_set_from_coefficient_matrix(solvable_matrices)
 
+    def generate_coded_retrieval_sets(self):
+        sets = []
+        for obj in self.objects:
+            sets.append(self.generate_coded_storage_retrieval_set_by_object(obj))
+        self.retrieval_sets = sets
+
+    def allocate_coded_objects(self, allocation):
+        for i in range(len(allocation)):
+            self.nodes[i].coefficients = allocation[i]
+        self.generate_all_coded_storage_coefficient_matrices()
+        self.generate_coded_retrieval_sets()
+
     def calculate_coded_retrieval_latencies_by_node_and_object(self, node, obj):
         retrieval_latencies = []
-        retrieval_sets = self.generate_coded_storage_retrieval_set_by_object(obj)
+        retrieval_sets = self.retrieval_sets[self.objects.index(obj)]
         for retrieval_set in retrieval_sets:
             set_latencies = []
             for n in retrieval_set:
